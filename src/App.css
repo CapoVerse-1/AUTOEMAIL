@@ -244,6 +244,16 @@ body {
   color: var(--text-secondary);
 }
 
+.status-active {
+  color: var(--success-color) !important;
+  font-weight: 500;
+}
+
+.status-inactive {
+  color: #f59e0b !important;
+  font-weight: 500;
+}
+
 /* Toggle Switch */
 .switch {
   position: relative;

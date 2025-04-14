@@ -278,7 +278,9 @@ const Settings = () => {
               <div className="project-card-content">
                 <p className="project-description">{profile.useCase.substring(0, 80)}...</p>
                 <div className="project-toggle">
-                  <span>Active</span>
+                  <span className={profile.isActive ? "status-active" : "status-inactive"}>
+                    {profile.isActive ? "Active" : "Inactive"}
+                  </span>
                   <label className="switch">
                     <input 
                       type="checkbox" 
