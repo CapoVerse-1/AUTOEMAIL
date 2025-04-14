@@ -23,6 +23,9 @@ const Settings = () => {
     isActive: false
   });
   
+  // Total number of steps in the wizard
+  const totalSteps = 6;
+  
   // Load saved profiles from local storage on component mount
   useEffect(() => {
     const savedProfiles = localStorage.getItem('projectProfiles');
@@ -86,9 +89,14 @@ const Settings = () => {
     const nextStep = currentStep + 1;
     setCurrentStep(nextStep);
     
-    // Calculate progress percentage (6 steps total)
-    const progress = Math.min(Math.floor((nextStep - 1) * 100 / 6), 100);
+    // Calculate progress percentage
+    const progress = Math.min(Math.floor((nextStep - 1) * 100 / totalSteps), 100);
     setProgressPercent(progress);
+    
+    // If we've reached the last step, create the project
+    if (nextStep > totalSteps) {
+      handleCreateProject();
+    }
   };
   
   // Handle previous step in the wizard
@@ -98,7 +106,7 @@ const Settings = () => {
       setCurrentStep(prevStep);
       
       // Calculate progress percentage
-      const progress = Math.floor((prevStep - 1) * 100 / 6);
+      const progress = Math.floor((prevStep - 1) * 100 / totalSteps);
       setProgressPercent(progress);
     }
   };
@@ -115,25 +123,29 @@ const Settings = () => {
     
     // Close the popup
     setShowPopup(false);
+    
+    // Set the new project as active
+    toggleProjectActive(newProject.id);
   };
   
   // Toggle project active status
   const toggleProjectActive = (id) => {
-    setProfiles(prev => 
-      prev.map(profile => {
-        // Deactivate all projects first
-        if (profile.id === id) {
-          return { ...profile, isActive: !profile.isActive };
-        } else {
-          return { ...profile, isActive: false };
-        }
-      })
-    );
+    const updatedProfiles = profiles.map(profile => ({
+      ...profile,
+      isActive: profile.id === id
+    }));
+    
+    setProfiles(updatedProfiles);
     
     // Store active project in localStorage
-    const activeProject = profiles.find(p => p.id === id);
+    const activeProject = profiles.find(p => p.id === id) || 
+                         (newProject.id === id ? newProject : null);
+    
     if (activeProject) {
-      localStorage.setItem('activeProjectSettings', JSON.stringify(activeProject));
+      localStorage.setItem('activeProjectSettings', JSON.stringify({
+        ...activeProject,
+        isActive: true
+      }));
     }
   };
   
@@ -143,11 +155,24 @@ const Settings = () => {
     
     if (window.confirm('Are you sure you want to delete this project?')) {
       setProfiles(prev => prev.filter(profile => profile.id !== id));
+      
+      // If the deleted project was active, clear the active project
+      const deletedProject = profiles.find(p => p.id === id);
+      if (deletedProject && deletedProject.isActive) {
+        localStorage.removeItem('activeProjectSettings');
+      }
     }
   };
   
   // Go to dashboard
   const goToDashboard = () => {
+    // Check if there's an active project
+    const activeProject = profiles.find(p => p.isActive);
+    if (!activeProject) {
+      alert('Please activate a project before proceeding to the dashboard.');
+      return;
+    }
+    
     navigate('/dashboard');
   };
   
@@ -178,6 +203,7 @@ const Settings = () => {
               onChange={handleInputChange}
               placeholder="Describe your email campaign's purpose..."
               className="wizard-textarea"
+              rows={4}
             />
           </div>
         );
@@ -191,6 +217,7 @@ const Settings = () => {
               onChange={handleInputChange}
               placeholder="Provide details about your business..."
               className="wizard-textarea"
+              rows={4}
             />
           </div>
         );
@@ -204,31 +231,37 @@ const Settings = () => {
               onChange={handleInputChange}
               placeholder="Optional sample email that guides the AI..."
               className="wizard-textarea"
+              rows={5}
             />
+            <p className="hint-text">This step is optional. You can skip it if you don't have a template email.</p>
           </div>
         );
       case 5:
         return (
           <div className="wizard-step">
             <h3>Standard Messages</h3>
-            <label>Greeting</label>
-            <input 
-              type="text"
-              name="greeting"
-              value={newProject.greeting}
-              onChange={handleInputChange}
-              placeholder="e.g., Hello,"
-              className="wizard-input"
-            />
-            <label>Outro</label>
-            <input 
-              type="text"
-              name="outro"
-              value={newProject.outro}
-              onChange={handleInputChange}
-              placeholder="e.g., Best regards,"
-              className="wizard-input"
-            />
+            <div className="input-group">
+              <label>Greeting</label>
+              <input 
+                type="text"
+                name="greeting"
+                value={newProject.greeting}
+                onChange={handleInputChange}
+                placeholder="e.g., Hello,"
+                className="wizard-input"
+              />
+            </div>
+            <div className="input-group">
+              <label>Outro</label>
+              <input 
+                type="text"
+                name="outro"
+                value={newProject.outro}
+                onChange={handleInputChange}
+                placeholder="e.g., Best regards,"
+                className="wizard-input"
+              />
+            </div>
           </div>
         );
       case 6:
@@ -241,7 +274,9 @@ const Settings = () => {
               onChange={handleInputChange}
               placeholder="Give specific instructions to ChatGPT (e.g., tone, style, points to emphasize...)"
               className="wizard-textarea"
+              rows={5}
             />
+            <p className="hint-text">These instructions will guide the AI in generating personalized emails.</p>
           </div>
         );
       default:
@@ -250,98 +285,98 @@ const Settings = () => {
   };
   
   return (
-    <div className="settings-dashboard">
-      <div className="dashboard-header">
-        <h1>Project Settings</h1>
-        <button className="add-project-button" onClick={handleAddProject}>
-          <span>+</span> Add Project
-        </button>
-      </div>
+    <div className="settings-container">
+      <h1>Project Settings</h1>
       
-      {profiles.length === 0 ? (
-        <div className="empty-projects">
-          <p>No projects yet. Create your first project to get started.</p>
-        </div>
-      ) : (
-        <div className="projects-grid">
-          {profiles.map(profile => (
-            <div key={profile.id} className="project-card">
-              <div className="project-card-header">
-                <h3>{profile.name}</h3>
-                <button 
-                  className="delete-project-button"
-                  onClick={(e) => handleDeleteProject(profile.id, e)}
+      <div className="settings-content">
+        <div className="projects-section">
+          <div className="section-header">
+            <h2>Your Projects</h2>
+            <button className="add-project-btn" onClick={handleAddProject}>
+              + New Project
+            </button>
+          </div>
+          
+          <div className="projects-list">
+            {profiles.length === 0 ? (
+              <div className="empty-state">
+                <p>No projects yet. Create your first project to get started.</p>
+              </div>
+            ) : (
+              profiles.map(profile => (
+                <div 
+                  key={profile.id} 
+                  className={`project-card ${profile.isActive ? 'active' : ''}`}
+                  onClick={() => toggleProjectActive(profile.id)}
                 >
-                  ×
-                </button>
-              </div>
-              <div className="project-card-content">
-                <p className="project-description">{profile.useCase.substring(0, 80)}...</p>
-                <div className="project-toggle">
-                  <span className={profile.isActive ? "status-active" : "status-inactive"}>
-                    {profile.isActive ? "Active" : "Inactive"}
-                  </span>
-                  <label className="switch">
-                    <input 
-                      type="checkbox" 
-                      checked={profile.isActive}
-                      onChange={() => toggleProjectActive(profile.id)}
-                    />
-                    <span className="slider"></span>
-                  </label>
+                  <div className="project-info">
+                    <h3>{profile.name}</h3>
+                    <p>{profile.useCase}</p>
+                    {profile.isActive && (
+                      <span className="active-badge">Active</span>
+                    )}
+                  </div>
+                  <button 
+                    className="delete-project-btn"
+                    onClick={(e) => handleDeleteProject(profile.id, e)}
+                  >
+                    ×
+                  </button>
                 </div>
-              </div>
-            </div>
-          ))}
+              ))
+            )}
+          </div>
         </div>
-      )}
-      
-      {profiles.some(p => p.isActive) && (
-        <div className="dashboard-actions">
-          <button className="go-dashboard-button" onClick={goToDashboard}>
+        
+        <div className="dashboard-link">
+          <button className="dashboard-btn" onClick={goToDashboard}>
             Go to Dashboard
           </button>
+          <p>Manage your emails and company data in the dashboard.</p>
         </div>
-      )}
+      </div>
       
-      {/* Add Project Wizard Popup */}
       {showPopup && (
         <div className="popup-overlay">
-          <div className="wizard-popup">
+          <div className="project-popup">
             <button className="close-popup" onClick={() => setShowPopup(false)}>×</button>
             
-            <div className="progress-bar-container">
-              <div className="progress-bar" style={{ width: `${progressPercent}%` }}></div>
+            <div className="popup-header">
+              <h2>Create New Project</h2>
+              <div className="progress-container">
+                <div 
+                  className="progress-bar" 
+                  style={{ width: `${progressPercent}%` }}
+                ></div>
+              </div>
+              <div className="step-indicator">
+                Step {currentStep} of {totalSteps}
+              </div>
             </div>
             
-            <div className="wizard-content">
+            <div className="popup-content">
               {renderStepContent()}
             </div>
             
-            <div className="wizard-actions">
+            <div className="popup-actions">
               {currentStep > 1 && (
-                <button className="wizard-back-button" onClick={handlePrevStep}>
+                <button className="prev-btn" onClick={handlePrevStep}>
                   Back
                 </button>
               )}
               
-              {currentStep < 6 && (
-                <button className="wizard-next-button" onClick={handleNextStep}>
-                  Next
-                </button>
-              )}
-              
-              {currentStep >= 4 && currentStep < 6 && (
-                <button className="wizard-skip-button" onClick={handleSkipStep}>
+              {currentStep === 4 && (
+                <button className="skip-btn" onClick={handleSkipStep}>
                   Skip
                 </button>
               )}
               
-              {currentStep === 6 && (
-                <button className="wizard-create-button" onClick={handleCreateProject}>
-                  Create Project
-                </button>
-              )}
+              <button 
+                className="next-btn" 
+                onClick={handleNextStep}
+              >
+                {currentStep === totalSteps ? 'Create Project' : 'Next'}
+              </button>
             </div>
           </div>
         </div>
