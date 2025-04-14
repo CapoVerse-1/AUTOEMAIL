@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { FaFileExcel, FaUpload } from 'react-icons/fa';
+import * as XLSX from 'xlsx';
 
 const ExcelImporter = ({ onImport, onCancel }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -75,9 +76,8 @@ const ExcelImporter = ({ onImport, onCancel }) => {
   };
   
   const handleDownloadTemplate = () => {
-    // Logic to download the template file would go here
-    // For now, just show an alert
-    alert('Template download functionality will be implemented later');
+    // Call the already implemented function to download the sample Excel file
+    downloadSampleExcel();
   };
 
   return (
