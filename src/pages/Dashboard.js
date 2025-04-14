@@ -1,293 +1,471 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
+import { v4 as uuidv4 } from 'uuid';
+import axios from 'axios';
+import companyDataFields from '../data/companyDataFields';
 
-const Dashboard = () => {
+const Dashboard = ({ projectSettings, setProjectSettings }) => {
   const navigate = useNavigate();
   
-  // States
+  const goToSettings = () => {
+    navigate('/settings');
+  };
+
   const [cards, setCards] = useState([]);
-  const [projectSettings, setProjectSettings] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [showImporter, setShowImporter] = useState(false);
-  
-  // Load project settings from localStorage on component mount
+  const [isLoading, setIsLoading] = useState(false);
+  const [isGeneratingEmails, setIsGeneratingEmails] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Load project settings from local storage
   useEffect(() => {
-    const settings = localStorage.getItem('activeProjectSettings');
-    if (!settings) {
-      // Redirect to settings if no active project is found
-      alert('Please set up and activate a project first.');
-      navigate('/settings');
-      return;
+    const storedSettings = localStorage.getItem('projectSettings');
+    if (storedSettings) {
+      setProjectSettings(JSON.parse(storedSettings));
     }
-    
-    try {
-      setProjectSettings(JSON.parse(settings));
-    } catch (error) {
-      console.error('Error parsing project settings:', error);
-      alert('Error loading project settings. Please set up a new project.');
-      navigate('/settings');
-    }
-  }, [navigate]);
-  
-  // Handle manual card addition
+  }, []);
+
+  // Add a blank card
   const addCard = () => {
     const newCard = {
-      id: Date.now().toString(),
-      email: '',
-      companyName: '',
-      companyDescription: '',
-      contactPerson: '',
-      generatedEmail: null,
-      isLoading: false,
-      isSent: false
+      id: uuidv4(),
+      companyData: {
+        companyName: '',
+        industry: '',
+        website: '',
+        productDescription: '',
+        mainPainPoint: '',
+        targetAudience: '',
+        competitorAdvantages: '',
+        uniqueSellingPoints: '',
+      },
+      email: null,
+      isGenerating: false,
+      error: null,
     };
-    
-    setCards(prev => [...prev, newCard]);
+    setCards([...cards, newCard]);
   };
-  
-  // Handle Excel file upload
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
+
+  // Handle file upload
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
     if (!file) return;
-    
+
+    setIsLoading(true);
+    setError(null);
+
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = (e) => {
       try {
-        const data = new Uint8Array(event.target.result);
+        const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
         
-        // Get the first worksheet
-        const worksheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[worksheetName];
+        // Assume first sheet
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet);
         
-        // Convert to JSON
-        const rows = XLSX.utils.sheet_to_json(worksheet);
-        
-        // Validate required columns
-        const requiredColumns = ['email', 'company name', 'company description'];
-        const columnCheck = requiredColumns.every(col => 
-          rows.length > 0 && Object.keys(rows[0]).some(header => 
-            header.toLowerCase() === col
-          )
-        );
-        
-        if (!columnCheck) {
-          alert('Invalid Excel format. Please ensure your file includes the columns: email, company name, company description');
+        if (json.length === 0) {
+          setError('The uploaded Excel file contains no data.');
+          setIsLoading(false);
           return;
         }
+
+        // Process and validate data
+        const newCards = json.map(row => {
+          const companyData = {};
+          companyDataFields.forEach(field => {
+            companyData[field.id] = row[field.label] || '';
+          });
+          
+          return {
+            id: uuidv4(),
+            companyData,
+            email: null,
+            isGenerating: false,
+            error: null,
+          };
+        });
         
-        // Transform to cards
-        const newCards = rows.map(row => ({
-          id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
-          email: row['email'] || '',
-          companyName: row['company name'] || '',
-          companyDescription: row['company description'] || '',
-          contactPerson: row['contact person'] || '',
-          generatedEmail: null,
-          isLoading: false,
-          isSent: false
-        }));
-        
-        setCards(prev => [...prev, ...newCards]);
-        alert(`Successfully imported ${newCards.length} company records.`);
-        
-      } catch (error) {
-        console.error('Error processing Excel file:', error);
-        alert('Error processing the Excel file. Please check the format and try again.');
+        setCards([...cards, ...newCards]);
+        setError(null);
+        setIsLoading(false);
+      } catch (err) {
+        setError('There was an error processing the Excel file. Please make sure it\'s a valid .xlsx file with the correct format.');
+        setIsLoading(false);
       }
+    };
+    
+    reader.onerror = () => {
+      setError('There was an error reading the file.');
+      setIsLoading(false);
     };
     
     reader.readAsArrayBuffer(file);
+    
+    // Reset the input
+    event.target.value = '';
   };
-  
+
   // Generate emails for all cards
   const generateEmails = async () => {
-    if (!projectSettings) {
-      alert('Please set up and activate a project first.');
-      navigate('/settings');
+    if (!projectSettings?.apiKey) {
+      setError('API key is not set. Please configure it in Settings.');
       return;
     }
     
-    if (cards.length === 0) {
-      alert('Please add at least one company card before generating emails.');
-      return;
-    }
+    setIsGeneratingEmails(true);
     
-    setIsGenerating(true);
-    
-    // Clone the current cards
-    const updatedCards = [...cards];
-    
-    // Process each card sequentially
-    for (let i = 0; i < updatedCards.length; i++) {
-      // Skip already generated emails unless they're being regenerated
-      if (updatedCards[i].generatedEmail && !updatedCards[i].isLoading) continue;
+    for (let i = 0; i < cards.length; i++) {
+      const card = cards[i];
       
-      updatedCards[i].isLoading = true;
-      setCards([...updatedCards]);
-      
-      try {
-        // API call to generate email
-        const response = await fetch('http://localhost:3001/api/generate-email', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            projectSettings,
-            companyData: {
-              email: updatedCards[i].email,
-              companyName: updatedCards[i].companyName,
-              companyDescription: updatedCards[i].companyDescription,
-              contactPerson: updatedCards[i].contactPerson
-            }
-          })
+      if (!card.email) {
+        // Update state to show this card is generating
+        setCards(prevCards => {
+          const updatedCards = [...prevCards];
+          updatedCards[i] = {
+            ...updatedCards[i],
+            isGenerating: true,
+            error: null
+          };
+          return updatedCards;
         });
         
-        if (!response.ok) {
-          throw new Error(`API error: ${response.status}`);
+        try {
+          const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: "gpt-3.5-turbo",
+            messages: [
+              {
+                role: "system",
+                content: `You are an assistant that writes personalized, convincing cold emails to potential clients. 
+                Use the following information to create a compelling email:
+                Project: ${projectSettings.projectName}
+                Industry: ${projectSettings.industry}
+                Your company: ${projectSettings.companyName}
+                Your name: ${projectSettings.userName}
+                Your role: ${projectSettings.userRole}
+                Main service: ${projectSettings.mainService}
+                Key benefits: ${projectSettings.keyBenefits}
+                Style: ${projectSettings.emailStyle}
+                
+                The email should be convincing but not pushy, personalized to the recipient's company and industry, and should focus on how your service can solve their specific pain points.
+                Keep the email under 200 words.
+                Don't use obvious template language.
+                End with a clear, low-pressure call to action.
+                Format with proper line breaks, paragraphs, etc.`
+              },
+              {
+                role: "user",
+                content: `Generate a personalized cold email to ${card.companyData.companyName} with these details:
+                - Company: ${card.companyData.companyName}
+                - Industry: ${card.companyData.industry}
+                - Website: ${card.companyData.website}
+                - Product/Service: ${card.companyData.productDescription}
+                - Pain point: ${card.companyData.mainPainPoint}
+                - Target audience: ${card.companyData.targetAudience}
+                - Competitor advantages: ${card.companyData.competitorAdvantages}
+                - Unique selling points: ${card.companyData.uniqueSellingPoints}`
+              }
+            ],
+            temperature: 0.7,
+            max_tokens: 600,
+          }, {
+            headers: {
+              'Authorization': `Bearer ${projectSettings.apiKey}`,
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          const generatedEmail = response.data.choices[0].message.content.trim();
+          
+          // Update the card with the generated email
+          setCards(prevCards => {
+            const updatedCards = [...prevCards];
+            updatedCards[i] = {
+              ...updatedCards[i],
+              email: generatedEmail,
+              isGenerating: false
+            };
+            return updatedCards;
+          });
+        } catch (error) {
+          console.error("Error generating email:", error);
+          // Update the card with the error
+          setCards(prevCards => {
+            const updatedCards = [...prevCards];
+            updatedCards[i] = {
+              ...updatedCards[i],
+              isGenerating: false,
+              error: "Failed to generate email. Please try again."
+            };
+            return updatedCards;
+          });
         }
-        
-        const data = await response.json();
-        
-        // Update the card with the generated email
-        updatedCards[i].generatedEmail = data.email;
-        updatedCards[i].isLoading = false;
-        
-      } catch (error) {
-        console.error('Error generating email:', error);
-        updatedCards[i].isLoading = false;
-        updatedCards[i].error = error.message;
       }
-      
-      // Update the state with the latest changes
-      setCards([...updatedCards]);
     }
     
-    setIsGenerating(false);
+    setIsGeneratingEmails(false);
   };
-  
-  // Update a specific card
-  const updateCard = (id, data) => {
-    setCards(prev => prev.map(card => 
-      card.id === id ? { ...card, ...data } : card
-    ));
-  };
-  
+
   // Delete a card
   const deleteCard = (id) => {
-    setCards(prev => prev.filter(card => card.id !== id));
+    setCards(cards.filter(card => card.id !== id));
   };
-  
-  // Handle card edits
-  const editCardEmail = (id, newContent) => {
-    updateCard(id, { generatedEmail: { ...cards.find(c => c.id === id).generatedEmail, body: newContent } });
+
+  // Update email content
+  const updateEmail = (id, content) => {
+    setCards(cards.map(card => 
+      card.id === id ? { ...card, email: content } : card
+    ));
   };
-  
-  return (
-    <div className="dashboard-container">
-      <h1>Email Dashboard</h1>
+
+  // Regenerate a specific email
+  const regenerateEmail = async (card, index) => {
+    if (!projectSettings?.apiKey) {
+      setError('API key is not set. Please configure it in Settings.');
+      return;
+    }
+    
+    // Update state to show this card is generating
+    setCards(prevCards => {
+      const updatedCards = [...prevCards];
+      updatedCards[index] = {
+        ...updatedCards[index],
+        isGenerating: true,
+        error: null
+      };
+      return updatedCards;
+    });
+    
+    try {
+      const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: `You are an assistant that writes personalized, convincing cold emails to potential clients. 
+            Use the following information to create a compelling email:
+            Project: ${projectSettings.projectName}
+            Industry: ${projectSettings.industry}
+            Your company: ${projectSettings.companyName}
+            Your name: ${projectSettings.userName}
+            Your role: ${projectSettings.userRole}
+            Main service: ${projectSettings.mainService}
+            Key benefits: ${projectSettings.keyBenefits}
+            Style: ${projectSettings.emailStyle}
+            
+            The email should be convincing but not pushy, personalized to the recipient's company and industry, and should focus on how your service can solve their specific pain points.
+            Keep the email under 200 words.
+            Don't use obvious template language.
+            End with a clear, low-pressure call to action.
+            Format with proper line breaks, paragraphs, etc.`
+          },
+          {
+            role: "user",
+            content: `Generate a personalized cold email to ${card.companyData.companyName} with these details:
+            - Company: ${card.companyData.companyName}
+            - Industry: ${card.companyData.industry}
+            - Website: ${card.companyData.website}
+            - Product/Service: ${card.companyData.productDescription}
+            - Pain point: ${card.companyData.mainPainPoint}
+            - Target audience: ${card.companyData.targetAudience}
+            - Competitor advantages: ${card.companyData.competitorAdvantages}
+            - Unique selling points: ${card.companyData.uniqueSellingPoints}`
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 600,
+      }, {
+        headers: {
+          'Authorization': `Bearer ${projectSettings.apiKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
       
-      {projectSettings && (
-        <div className="project-info">
-          <h2>Active Project: {projectSettings.useCase}</h2>
-        </div>
-      )}
+      const generatedEmail = response.data.choices[0].message.content.trim();
+      
+      // Update the card with the generated email
+      setCards(prevCards => {
+        const updatedCards = [...prevCards];
+        updatedCards[index] = {
+          ...updatedCards[index],
+          email: generatedEmail,
+          isGenerating: false
+        };
+        return updatedCards;
+      });
+    } catch (error) {
+      console.error("Error regenerating email:", error);
+      // Update the card with the error
+      setCards(prevCards => {
+        const updatedCards = [...prevCards];
+        updatedCards[index] = {
+          ...updatedCards[index],
+          isGenerating: false,
+          error: "Failed to regenerate email. Please try again."
+        };
+        return updatedCards;
+      });
+    }
+  };
+
+  // Check if all required fields are filled
+  const hasCompletedCompanyData = () => {
+    return cards.length > 0 && cards.every(card => 
+      card.companyData.companyName && card.companyData.industry
+    );
+  };
+
+  return (
+    <div className="dashboard-main">
+      <div className="dashboard-header">
+        <h1>Dashboard</h1>
+        
+        {projectSettings?.projectName && (
+          <div className="active-project">
+            <div className="project-badge">Active</div>
+            <div className="project-name">{projectSettings.projectName}</div>
+            <button className="change-project-button" onClick={goToSettings}>
+              Change
+            </button>
+          </div>
+        )}
+      </div>
       
       <div className="actions-bar">
-        <button onClick={addCard}>Add Card Manually</button>
-        <label className="file-input-button">
+        <button 
+          className="action-button add-company-button"
+          onClick={addCard}
+        >
+          <span className="action-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+          </span>
+          Add Company
+        </button>
+        
+        <label className="action-button import-button">
+          <span className="action-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </span>
           Import Excel
-          <input 
-            type="file" 
-            accept=".xlsx, .xls" 
-            onChange={handleFileUpload} 
-            style={{ display: 'none' }} 
+          <input
+            type="file"
+            accept=".xlsx, .xls"
+            onChange={handleFileUpload}
+            style={{ display: 'none' }}
           />
         </label>
-        <button 
+        
+        <button
+          className="action-button generate-button"
           onClick={generateEmails}
-          disabled={isGenerating || cards.length === 0}
-          className={isGenerating ? 'loading' : ''}
+          disabled={isGeneratingEmails || !hasCompletedCompanyData() || !projectSettings?.apiKey}
         >
-          {isGenerating ? 'Generating...' : 'Generate Emails'}
+          <span className="action-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </span>
+          Generate Emails
         </button>
       </div>
       
-      {isGenerating && (
-        <div className="loading-overlay">
-          <div className="loading-spinner"></div>
-          <p>Generating personalized emails...</p>
+      {error && (
+        <div className="global-error">
+          <p>{error}</p>
+          <button onClick={() => setError(null)}>Dismiss</button>
         </div>
       )}
       
       <div className="cards-container">
         {cards.length === 0 ? (
           <div className="empty-state">
-            <p>No company cards yet. Add cards manually or import from Excel.</p>
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="empty-icon">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="9" y1="9" x2="15" y2="9"></line>
+              <line x1="9" y1="12" x2="15" y2="12"></line>
+              <line x1="9" y1="15" x2="13" y2="15"></line>
+            </svg>
+            <p>No companies added yet. Add a company or import from Excel to get started.</p>
+            <button className="action-button empty-action" onClick={addCard}>
+              <span className="action-icon">+</span>
+              Add First Company
+            </button>
           </div>
         ) : (
-          cards.map(card => (
+          cards.map((card, index) => (
             <div key={card.id} className="card">
               <div className="card-header">
-                <h3>{card.companyName || 'Untitled Company'}</h3>
-                <button onClick={() => deleteCard(card.id)} className="delete-button">×</button>
+                <h3>{card.companyData.companyName || 'New Company'}</h3>
+                <button className="delete-button" onClick={() => deleteCard(card.id)}>×</button>
               </div>
-              
               <div className="card-content">
                 <div className="company-info">
-                  <p><strong>Email:</strong> {card.email}</p>
-                  <p><strong>Description:</strong> {card.companyDescription}</p>
-                  {card.contactPerson && (
-                    <p><strong>Contact:</strong> {card.contactPerson}</p>
-                  )}
+                  <p><strong>Industry:</strong> {card.companyData.industry || 'Not specified'}</p>
+                  {card.companyData.website && <p><strong>Website:</strong> {card.companyData.website}</p>}
+                  {card.companyData.productDescription && <p><strong>Product:</strong> {card.companyData.productDescription}</p>}
                 </div>
                 
-                {card.isLoading ? (
+                {card.isGenerating ? (
                   <div className="card-loading">
                     <div className="loading-spinner small"></div>
                     <p>Generating email...</p>
                   </div>
                 ) : card.error ? (
                   <div className="card-error">
-                    <p>Error: {card.error}</p>
-                    <button onClick={() => updateCard(card.id, { isLoading: true, error: null })}>
-                      Retry
-                    </button>
+                    <p>{card.error}</p>
+                    <button onClick={() => regenerateEmail(card, index)}>Try Again</button>
                   </div>
-                ) : card.generatedEmail ? (
+                ) : card.email ? (
                   <div className="email-preview">
-                    <h4>Subject: {card.generatedEmail.subject}</h4>
+                    <h4>Generated Email</h4>
                     <textarea
-                      value={card.generatedEmail.body}
-                      onChange={(e) => editCardEmail(card.id, e.target.value)}
-                      rows={5}
+                      value={card.email}
+                      onChange={(e) => updateEmail(card.id, e.target.value)}
+                      rows={8}
                     />
-                    
                     <div className="card-actions">
-                      <button 
-                        onClick={() => updateCard(card.id, { isLoading: true })}
-                        className="regenerate-button"
-                      >
+                      <button className="regenerate-button" onClick={() => regenerateEmail(card, index)}>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="button-icon">
+                          <path d="M23 4v6h-6"/>
+                          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                        </svg>
                         Regenerate
                       </button>
-                      
-                      <button 
-                        onClick={() => {
-                          // Send email logic will be implemented later
-                          alert(`Email would be sent to ${card.email}`);
-                        }}
-                        className="send-button"
-                      >
+                      <button className="send-button">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="button-icon">
+                          <line x1="22" y1="2" x2="11" y2="13"/>
+                          <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                        </svg>
                         Send
                       </button>
                     </div>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="no-email-state">
+                    <p>Click "Generate Emails" to create an email for this company.</p>
+                  </div>
+                )}
               </div>
             </div>
           ))
         )}
       </div>
+      
+      {isLoading && (
+        <div className="loading-overlay">
+          <div className="loading-spinner"></div>
+          <p>Processing...</p>
+        </div>
+      )}
     </div>
   );
 };
